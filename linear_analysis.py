@@ -5,13 +5,8 @@ import holidays
 from functools import reduce
 import statsmodels.api as sm
 from sklearn.metrics import r2_score
-from interpret import set_visualize_provider
-from interpret.provider import InlineProvider
-import plotly.io as pio
 import re
 
-pio.renderers.default = "browser"
-set_visualize_provider(InlineProvider())
 
 ''' Fingrid data '''
 
