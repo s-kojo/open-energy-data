@@ -7,6 +7,9 @@ from sklearn.metrics import r2_score
 from lightgbm import LGBMRegressor
 import shap
 import re
+import seaborn as sns
+from matplotlib import pyplot as plt
+from matplotlib import gridspec
 
 ''' Fingrid data '''
 
@@ -56,8 +59,10 @@ nordpool_data.index = pd.to_datetime(nordpool_data.index)
 non_zero_columns = nordpool_data.filter(regex='^((?!hinta).)*$').columns
 nordpool_data[non_zero_columns] = nordpool_data[non_zero_columns].replace({'0':np.nan, 0:np.nan})
 
-y = np.log2(np.log2(nordpool_data['Saatohinta, EUR/MWh, FI, Up'] - nordpool_data['Elspot-hinta, EUR/MWh, FI'] + 1) + 1).dropna()
-y.name = 'log-hinta'
+# y = np.log2(np.log2(nordpool_data['Saatohinta, EUR/MWh, FI, Up'] - nordpool_data['Elspot-hinta, EUR/MWh, FI'] + 1) + 1).dropna()
+# y.name = 'log-log-hinta'
+y = (nordpool_data['Saatohinta, EUR/MWh, FI, Up'] - nordpool_data['Elspot-hinta, EUR/MWh, FI']).dropna()
+y.name = 'hinta'
 
 X = pd.DataFrame(index=y.index)
 X['vuosi'] = X.index.year - X.index.year.min()
@@ -74,11 +79,12 @@ X['Tunti sykli 2'] = np.cos(2 * np.pi * (X.index.hour) / 24)
 X['Vesivoimareservi, FI'] = nordpool_data['Vesivoimareservi, GWh, FI']
 X['Vesivoimareservi, NO'] = nordpool_data['Vesivoimareservi, GWh, NO']
 X['Vesivoimareservi, SE'] = nordpool_data['Vesivoimareservi, GWh, SE']
+X['Aluehintaero'] = nordpool_data['Elspot-hinta, EUR/MWh, SYS'] - nordpool_data['Elspot-hinta, EUR/MWh, FI']
 
 ''' Country differences'''
 
-difference_variables = {'Tuulituotantoennuste': 'Tuulituotanto,', 'Kulutusennuste': 'Kulutus,',
-                        'Tuotantoennuste': 'Tuotanto,', 'Kulutus,': 'Tuotanto,'}
+difference_variables = {'Tuulituotantoennuste': 'Tuulituotanto,', 'Kulutusennuste': 'Kulutus,'}
+                        # ,'Tuotantoennuste': 'Tuotanto,', 'Kulutus,': 'Tuotanto,'}
 
 for key, value in difference_variables.items():
     forecast_series = nordpool_data.filter(like=key)
@@ -104,9 +110,8 @@ for key, value in difference_variables.items():
 
 ''' Fingrid '''
 
-X['Poikkeama tuotantosuunnitelmasta'] = fingrid_data['242'] - fingrid_data["74"]
-X['Tuotantoennuste - lyhyt - pitka'] = fingrid_data['241'] - fingrid_data['242']
-X['Ylossaatotarjousten summa'] = fingrid_data['243']
+# X['Poikkeama tuotantosuunnitelmasta'] = fingrid_data['242'] - fingrid_data["74"]
+# X['Tuotantoennuste - lyhyt - pitka'] = fingrid_data['241'] - fingrid_data['242']
 
 X['Kulutusennuste - virhe'] = fingrid_data['166'] - fingrid_data['124']
 X['Kulutusennuste - lyhyt - pitka'] = fingrid_data['166'] - fingrid_data['165']
@@ -118,6 +123,10 @@ X['Aurinkoennuste - lyhyt - pitka'] = fingrid_data['247'] - fingrid_data['248']
 
 X['Vapaa P1 kapasiteetti etelasta pohjoiseen'] = fingrid_data['30'] - fingrid_data['29']
 X['Vapaa P1 kapasiteetti pohjoisesta etelaan'] = fingrid_data['28'] - fingrid_data['30']
+
+fingrid_data['24'][-fingrid_data['31'] > fingrid_data['24']] = np.nan
+fingrid_data['25'][-fingrid_data['32'] > fingrid_data['25']] = np.nan
+
 X['SE1 vapaakapasiteetti'] = fingrid_data['24'] + fingrid_data['31']
 X['SE3 vapaakapasiteetti'] = fingrid_data['25'] + fingrid_data['32']
 X['RU vapaakapasiteetti'] = fingrid_data['64']
@@ -156,30 +165,98 @@ X['Tuotanto summa NP (suunniteltu)'] = UMM_data.filter(like='plannedproduction')
 X['Ydinvoima UMM NP (ei suunniteltu)'] = UMM_data.filter(like='Nuclear unplannedproduction').sum(axis=1)
 X['Ydinvoima UMM FI (suunniteltu)'] = UMM_data.filter(like='Nuclear plannedproduction').sum(axis=1)
 
-X = X.rename(columns = lambda x:re.sub('[^A-Za-z0-9_]+', '', x))
+X = X.rename(columns=lambda x: re.sub('[^A-Za-z0-9_]+', '', x))
 y_train, y_test = y[y.index.year != 2022], y[y.index.year == 2022]
 X_train, X_test = X[X.index.year != 2022], X[X.index.year == 2022]
 
-model = LGBMRegressor(min_child_samples=3, n_estimators=4000)
-model.fit(X, y)
+model = LGBMRegressor(n_estimators=6000)
+model.fit(X_train, y_train)
 
 pred = pd.DataFrame(data={'ennuste': model.predict(X_test)}, index=y_test.index)
 pred[pred['ennuste'] < 0] = 0
 
 pred = pred.join(y_test)
 
-print('LGB R2 {}'.format(r2_score(pred['log-hinta'], pred['ennuste'])))
-print('naive R2 {}'.format(r2_score(pred['log-hinta'][1:], pred['log-hinta'].shift(1)[1:])))
+print('LGB R2 {}'.format(r2_score(pred['hinta'], pred['ennuste'])))
 
-X_sample = X[y > 3]
+X_sampled = X_test
 
-explainer = shap.Explainer(model.predict, X_sample)
-shap_values = explainer(X_sample)
+explainer = shap.TreeExplainer(model)
+shap_values = explainer(X_sampled)
+shap_interaction = explainer.shap_interaction_values(X_sampled)
 
-shap.plots.heatmap(shap_values, max_display=39)
+# Get absolute mean of matrices
+mean_shap = np.quantile(np.abs(shap_interaction), q=0.99, axis=0)
+df = pd.DataFrame(mean_shap, index=X.columns, columns=X.columns)
 
-shap.plots.beeswarm(shap_values, max_display=40)
+# times off diagonal by 2
+df.where(df.values == np.diagonal(df), df.values*2, inplace=True)
 
-# shap.plots.scatter(shap_values[:, 'Poikkeamatuotantosuunnitelmasta'])
-# shap.plots.scatter(shap_values[:, 'Tuuliennustevirhe'])
+# display
+fig = plt.figure(figsize=(20, 15))
+ax = fig.add_subplot()
+sns.heatmap(df.round(decimals=3), cmap='magma', annot=False, fmt='.6g', cbar=True, ax=ax, )
+ax.tick_params(axis='x', labelsize=10, rotation=90)
+ax.tick_params(axis='y', labelsize=10)
 
+plt.yticks(rotation=0)
+plt.show()
+
+# plot feature interaction
+def plot_feature_interaction(f1, f2, percentile=10):
+    # dependence plot
+    fig = plt.figure(tight_layout=True, figsize=(20, 10))
+    spec = gridspec.GridSpec(ncols=3, nrows=2, figure=fig)
+
+    ax0 = fig.add_subplot(spec[0, 0])
+    lowv, highv = np.percentile(X[f2].dropna(), [percentile, 100-percentile])
+
+    shap.dependence_plot(f1, shap_values.values, X_sampled, display_features=X_sampled, interaction_index=f2, ax=ax0,
+                         show=False)
+    ax0.set_title(f'SHAP main effect', fontsize=10)
+
+    ax1 = fig.add_subplot(spec[0, 1])
+    shap.dependence_plot((f1, f2), shap_interaction, X_sampled, display_features=X_sampled, ax=ax1, axis_color='w',
+                         show=False)
+    ax1.set_title(f'SHAP interaction effect', fontsize=10)
+
+    temp = pd.DataFrame({f1: X[f1].values,
+                         'target': y.values})
+    temp = temp.sort_values(f1)
+    temp.reset_index(inplace=True)
+
+    ax3 = fig.add_subplot(spec[1, 0])
+    sns.scatterplot(x=temp[f1], y=temp.target.rolling(3000, center=True).mean(), data=temp, ax=ax3, s=2)
+    ax3.set_title(f'Target (rolling mean) on {f1}', fontsize=10)
+
+    temp = pd.DataFrame({f1: X.loc[X[f2] < lowv, f1].values,
+                         'target': y.loc[X[f2] < lowv].values})
+    temp = temp.sort_values(f1)
+    temp.reset_index(inplace=True)
+
+    ax4 = fig.add_subplot(spec[1, 1])
+    sns.scatterplot(x=temp[f1], y=temp.target.rolling(3000, center=True).mean(), data=temp, ax=ax4, s=2)
+    ax4.set_title(f'Target (rolling mean) on {f1} & {f2} below {str(percentile)}th percentile',
+                  fontsize=10)
+
+    temp = pd.DataFrame({f1: X.loc[X[f2] > highv, f1].values,
+                         'target': y.loc[X[f2] > highv].values})
+
+    temp = temp.sort_values(f1)
+    temp.reset_index(inplace=True)
+
+    ax5 = fig.add_subplot(spec[1, 2])
+    sns.scatterplot(x=temp[f1], y=temp.target.rolling(3000, center=True).mean(), data=temp, ax=ax5, s=2)
+    ax5.set_title(f'Target (rolling mean) on {f1} & {f2} above {str(100 - percentile)}th percentile',
+                  fontsize=10)
+
+    plt.suptitle(f"Feature Interaction Analysis\n {f1} & {f2}", fontsize=30, y=1.15)
+    fig.tight_layout()
+
+    plt.show()
+
+f1 = 'VesivoimareserviSE'
+f2 = 'VesivoimareserviNO'
+percentile = 10
+
+plot_feature_interaction(f1, f2, percentile)
