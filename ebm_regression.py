@@ -147,7 +147,7 @@ y_train, y_test = y[y.index.year != 2022], y[y.index.year == 2022]
 X_train, X_test = X[X.index.year != 2022], X[X.index.year == 2022]
 
 model_ebm = interpret.glassbox.ExplainableBoostingRegressor(interactions=10)
-model_ebm.fit(X, y)
+model_ebm.fit(X_train, y_train)
 
 ebm_pred = pd.DataFrame(data={'ebm-ennuste': model_ebm.predict(X_test)}, index=y_test.index)
 ebm_pred[ebm_pred['ebm-ennuste'] < 0] = 0
