@@ -161,7 +161,7 @@ y_train, y_test = y[y.index.year != 2022], y[y.index.year == 2022]
 X_train, X_test = X[X.index.year != 2022], X[X.index.year == 2022]
 
 model = LGBMRegressor(min_child_samples=3, n_estimators=4000)
-model.fit(X, y)
+model.fit(X_train, y_train)
 
 pred = pd.DataFrame(data={'ennuste': model.predict(X_test)}, index=y_test.index)
 
